@@ -1,0 +1,33 @@
+# 二进制文件
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 测试二进制
+*.test
+
+# 覆盖率输出
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# ASE 运行时
+*.db
+*.sqlite
+
+#claude
+.claude/
+
+#superpowers
+docs/superpowers
