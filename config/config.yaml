@@ -1,0 +1,21 @@
+#主模型
+models:
+  - name: deepseek-v3
+    provider: deepseek
+    api_key: ""
+    base_url: https://api.deepseek.com
+
+#路由模型
+routing:
+  execute: deepseek-v3
+  analyze: deepseek-v3
+  improve: deepseek-v3
+
+#沙盒配置
+sandbox:
+  image: golang:1.22
+  network_disabled: true
+  cleanup: true
+
+#测试并完善的最大次数
+max_retries: 3
