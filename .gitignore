@@ -27,7 +27,5 @@ Thumbs.db
 *.sqlite
 
 #claude
-.claude/
+/.claude/
 
-#superpowers
-docs/superpowers
