@@ -4,44 +4,48 @@ import (
 	"time"
 )
 
+// Skill 是 SKILL.md 的元数据容器。
+// 执行时 LLM 直接读取 RawContent，不依赖预解析的 Steps。
 type Skill struct {
+	// 身份信息
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Path        string `json:"-"` //SKILL.md文件路径
-	Dir         string `json:"-"` //skill所在目录
-	RawContent  string `json:"-"` //原始文件内容
+	Path        string `json:"-"` // SKILL.md 文件路径
+	Dir         string `json:"-"` // skill 所在目录
 
-	Frontmatter map[string]interface{} `json:"frontmatter"` //
+	// 全文内容（执行时使用）
+	RawContent string `json:"-"` // 完整 SKILL.md 文本
 
-	//执行信息
-	Steps []Step       `json:"steps"`
-	Deps  []Dependency `json:"deps"`
+	// Frontmatter（原样保留，供改进时回写）
+	Frontmatter map[string]interface{} `json:"frontmatter"`
 
-	Purpose        string   `json:"purpose"`        //skill的核心目的
-	UseCases       []string `json:"use_cases"`      //使用场景
-	CorePrinciples string   `json:"corePrinciples"` //核心原则/约束
-	//分类结果
-	SkillType     string `json:"skillType"`     //
-	HasExecutable bool   `json:"hasExecutable"` //是否包含可执行步骤
-	HasGuidance   bool   `json:"hasGuidance"`   //是否包含指导原则
+	// 元数据（用于路由/索引/分类）
+	Deps           []Dependency `json:"deps"`
+	Purpose        string       `json:"purpose"`
+	UseCases       []string     `json:"use_cases"`
+	CorePrinciples string       `json:"core_principles"`
+	SkillType      string       `json:"skill_type"` // "executable", "instructional", "mixed"
+	HasExecutable  bool         `json:"has_executable"`
+	HasGuidance    bool         `json:"has_guidance"`
 
-	//辅助文件，比如一些脚本和参考，指导原则等
-	SupportFiles map[string]string `json:"supportFiles"`
+	// 辅助文件（执行时使用）
+	SupportFiles map[string]string `json:"support_files"` // 相对路径 → 文件内容
 }
 
-// 从skill.md中提取到的可执行步骤
+// Step 从 SKILL.md 中提取的可执行步骤。
+// Parser 不填充此类型；Docker 执行工具在运行时按需使用。
 type Step struct {
 	Name     string `json:"name"`
 	Command  string `json:"command"`
-	Expected string `json:"expected"` //预期结果/输出
+	Expected string `json:"expected"`
 	Order    int    `json:"order"`
 }
 
-// 运行这个skill需要的环境
+// Dependency skill 运行所需的环境依赖。
 type Dependency struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
-	Type    string `json:"type"`
+	Type    string `json:"type"` // "tool", "language", "service"
 }
 
 // TestScenario 测试场景（用于 Agent 模拟测试）。

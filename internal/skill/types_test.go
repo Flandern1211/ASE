@@ -14,10 +14,6 @@ func TestSkillFields(t *testing.T) {
 		Frontmatter: map[string]interface{}{
 			"name":        "test-skill",
 			"description": "Use when testing skill parsing",
-			"version":     1,
-		},
-		Steps: []Step{
-			{Name: "step1", Command: "echo hello", Expected: "hello", Order: 1},
 		},
 		Deps: []Dependency{
 			{Name: "go", Version: ">=1.21", Type: "language"},
@@ -34,14 +30,8 @@ func TestSkillFields(t *testing.T) {
 	if s.Name != "test-skill" {
 		t.Errorf("expected name 'test-skill', got %q", s.Name)
 	}
-	if len(s.Steps) != 1 {
-		t.Errorf("expected 1 step, got %d", len(s.Steps))
-	}
 	if len(s.Deps) != 1 {
 		t.Errorf("expected 1 dep, got %d", len(s.Deps))
-	}
-	if s.Steps[0].Command != "echo hello" {
-		t.Errorf("expected command 'echo hello', got %q", s.Steps[0].Command)
 	}
 	if s.SkillType != "mixed" {
 		t.Errorf("expected skill_type 'mixed', got %q", s.SkillType)
