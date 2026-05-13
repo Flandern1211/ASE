@@ -1,6 +1,6 @@
 # 任务 2：核心类型
 
-**目标：** 定义 Skill、ExecResult、Analysis 等核心数据结构，作为 LLM 解析 SKILL.md 后的输出容器。
+**目标：** 定义 Skill、ExecResult、Analysis 等核心数据结构，作为 Skill 的元数据容器和运行时数据载体。
 
 **文件：**
 - 创建：`internal/skill/types.go`
@@ -8,30 +8,63 @@
 
 ---
 
-## 设计决策：为什么用 LLM 解析
+## 设计决策：混合模式（元数据解析 + 全文执行）
 
-SKILL.md 格式是**半结构化**的：
-- Frontmatter 字段不固定（必须有 name/description，其他可选）
-- Markdown body 完全自由格式（步骤、指令、流程图、代码示例混杂）
-- 目录结构不固定（可能有 scripts/、tests/、config/ 等子目录）
+### 为什么不做完整结构化解析
 
-**结论：** 不适合用固定 struct + yaml tag 做硬解析。改用 LLM 做语义解析，struct 仅作为 LLM 输出的容器。
+分析了 5 个代表性 SKILL.md 文件后，发现：
+- **60%** 的 skill 可以良好映射到结构化步骤（verification-before-completion, writing-plans）
+- **20%** 是混合型（TDD：核心流程可解析，大量内容是说理/反面教材）
+- **20%** 本质上无法解析（using-superpowers：元指导/路由型 skill）
+- 即使能解析的 skill，**Red Flags、Rationalizations、Iron Law** 等纪律性内容在解析中丢失
 
-### 解析流程
+**结论：** parser 只提取元数据用于路由/索引，执行时 LLM 直接读取全文。
 
+### 职责划分
+
+| 组件 | 职责 | 数据来源 |
+|------|------|----------|
+| **Parser** | 提取元数据（name, description, deps, skill_type 等） | SKILL.md frontmatter + LLM 语义提取 |
+| **RawContent** | 存储完整 SKILL.md 文本 | 直接读取文件 |
+| **SupportFiles** | 存储辅助文件内容 | 扫描目录 |
+| **执行时 LLM** | 按全文执行 skill、验证、分析、改进 | RawContent + SupportFiles |
+
+---
+
+## Skill 结构体设计
+
+```go
+type Skill struct {
+    // --- 身份信息 ---
+    Name        string `json:"name"`
+    Description string `json:"description"`
+    Path        string `json:"-"`        // SKILL.md 文件路径
+    Dir         string `json:"-"`        // skill 所在目录
+
+    // --- 全文内容（执行时使用） ---
+    RawContent  string `json:"-"`        // 完整 SKILL.md 文本
+
+    // --- Frontmatter（原样保留，供改进时回写） ---
+    Frontmatter map[string]interface{} `json:"frontmatter"`
+
+    // --- 元数据（用于路由/索引/分类） ---
+    Deps            []Dependency `json:"deps"`
+    Purpose         string       `json:"purpose"`
+    UseCases        []string     `json:"use_cases"`
+    CorePrinciples  string       `json:"core_principles"`
+    SkillType       string       `json:"skill_type"`      // "executable", "instructional", "mixed"
+    HasExecutable   bool         `json:"has_executable"`
+    HasGuidance     bool         `json:"has_guidance"`
+
+    // --- 辅助文件（执行时使用） ---
+    SupportFiles map[string]string `json:"support_files"`
+}
 ```
-SKILL.md + 辅助文件 → 读取原始内容 → LLM 提取结构化信息 → Skill struct
-```
 
-### LLM 需要提取的信息
-
-| 信息类别 | 说明 | 用途 |
-|---|---|---|
-| 元数据 | name, description, argument-hint 等 | 识别和展示 |
-| 执行步骤 | 可执行的 shell 命令、预期结果 | Docker 沙箱执行 |
-| 环境依赖 | 需要的工具、语言版本、Docker | 选择基础镜像 |
-| 语义理解 | skill 的用途、适用场景、核心原则 | 改进时保持意图 |
-| 辅助文件 | scripts/、tests/ 等文件内容 | 完整执行上下文 |
+**关键变化：**
+- 移除 `Steps []Step` — 不再由 parser 预解析步骤
+- `RawContent` 保持 `-` 不序列化 — 它是运行时数据，不应持久化到 JSON
+- Step 类型保留但不再被 parser 填充 — 后续工具（如 Docker 执行）可能需要在运行时从全文中提取步骤
 
 ---
 
@@ -44,50 +77,48 @@ package skill
 
 import "time"
 
-// Skill 是 LLM 解析 SKILL.md 后的输出容器。
-// 字段设计围绕 ASE 需要"对 skill 做什么"，而非 SKILL.md 的格式。
+// Skill 是 SKILL.md 的元数据容器。
+// 执行时 LLM 直接读取 RawContent，不依赖预解析的 Steps。
 type Skill struct {
 	// --- 身份信息 ---
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Path        string `json:"-"`        // SKILL.md 文件路径
-	Dir         string `json:"-"`        // skill 所在目录
-	RawContent  string `json:"-"`        // 原始文件内容
+	Path        string `json:"-"` // SKILL.md 文件路径
+	Dir         string `json:"-"` // skill 所在目录
 
-	// --- Frontmatter（原样保留，供 LLM 改进时回写） ---
+	// --- 全文内容（执行时使用） ---
+	RawContent string `json:"-"` // 完整 SKILL.md 文本
+
+	// --- Frontmatter（原样保留，供改进时回写） ---
 	Frontmatter map[string]interface{} `json:"frontmatter"`
 
-	// --- 执行信息 ---
-	Steps    []Step           `json:"steps"`
-	Deps     []Dependency     `json:"deps"`
+	// --- 元数据（用于路由/索引/分类） ---
+	Deps           []Dependency `json:"deps"`
+	Purpose        string       `json:"purpose"`
+	UseCases       []string     `json:"use_cases"`
+	CorePrinciples string       `json:"core_principles"`
+	SkillType      string       `json:"skill_type"`     // "executable", "instructional", "mixed"
+	HasExecutable  bool         `json:"has_executable"`
+	HasGuidance    bool         `json:"has_guidance"`
 
-	// --- 语义理解 ---
-	Purpose        string   `json:"purpose"`         // skill 的核心目的
-	UseCases       []string `json:"use_cases"`       // 适用场景
-	CorePrinciples string   `json:"core_principles"` // 核心原则/约束
-
-	// --- 分类结果 ---
-	SkillType     string `json:"skill_type"`      // "executable", "instructional", "mixed"
-	HasExecutable bool   `json:"has_executable"`  // 是否包含可执行步骤
-	HasGuidance   bool   `json:"has_guidance"`    // 是否包含指导原则
-
-	// --- 辅助文件 ---
-	SupportFiles map[string]string `json:"support_files"` // 相对路径 → 文件内容
+	// --- 辅助文件（执行时使用） ---
+	SupportFiles map[string]string `json:"support_files"`
 }
 
-// Step 从 SKILL.md body 中提取的可执行步骤。
+// Step 从 SKILL.md 中提取的可执行步骤。
+// Parser 不填充此类型；Docker 执行工具在运行时按需提取。
 type Step struct {
 	Name     string `json:"name"`
 	Command  string `json:"command"`
-	Expected string `json:"expected"` // 预期输出/结果
+	Expected string `json:"expected"`
 	Order    int    `json:"order"`
 }
 
 // Dependency skill 运行所需的环境依赖。
 type Dependency struct {
-	Name    string `json:"name"`    // 工具名，如 "go", "docker"
-	Version string `json:"version"` // 版本要求，如 ">=1.21"
-	Type    string `json:"type"`    // "tool", "language", "service"
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Type    string `json:"type"` // "tool", "language", "service"
 }
 
 // TestScenario 测试场景（用于 Agent 模拟测试）。
@@ -169,10 +200,6 @@ func TestSkillFields(t *testing.T) {
 		Frontmatter: map[string]interface{}{
 			"name":        "test-skill",
 			"description": "Use when testing skill parsing",
-			"version":     1,
-		},
-		Steps: []Step{
-			{Name: "step1", Command: "echo hello", Expected: "hello", Order: 1},
 		},
 		Deps: []Dependency{
 			{Name: "go", Version: ">=1.21", Type: "language"},
@@ -189,14 +216,8 @@ func TestSkillFields(t *testing.T) {
 	if s.Name != "test-skill" {
 		t.Errorf("expected name 'test-skill', got %q", s.Name)
 	}
-	if len(s.Steps) != 1 {
-		t.Errorf("expected 1 step, got %d", len(s.Steps))
-	}
 	if len(s.Deps) != 1 {
 		t.Errorf("expected 1 dep, got %d", len(s.Deps))
-	}
-	if s.Steps[0].Command != "echo hello" {
-		t.Errorf("expected command 'echo hello', got %q", s.Steps[0].Command)
 	}
 	if s.SkillType != "mixed" {
 		t.Errorf("expected skill_type 'mixed', got %q", s.SkillType)
@@ -207,6 +228,13 @@ func TestSkillFields(t *testing.T) {
 	if !s.HasGuidance {
 		t.Error("expected has_guidance=true")
 	}
+}
+
+func TestSkillNoStepsField(t *testing.T) {
+	// 验证 Skill 不再包含 Steps 字段
+	s := Skill{Name: "test"}
+	// s.Steps 不应存在 — 如果编译通过即证明字段已移除
+	_ = s
 }
 
 func TestTestScenario(t *testing.T) {
@@ -272,5 +300,5 @@ go test ./internal/skill/ -v
 
 ```bash
 git add internal/skill/types.go internal/skill/types_test.go
-git commit -m "feat: 添加基于 LLM 解析的 Skill、ExecResult 核心类型"
+git commit -m "feat: 简化核心类型 — 移除 Steps，改为纯元数据 + RawContent"
 ```

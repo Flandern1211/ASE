@@ -1,10 +1,18 @@
 # 任务 8：分析工具
 
-**目标：** 使用 LLM 分析验证失败原因，支持 Docker 执行失败和 Agent 模拟失败两种类型。
+**目标：** 使用 LLM 分析验证失败原因，支持 Docker 执行失败和 Agent 模拟失败两种类型。LLM 基于完整 SKILL.md 内容进行分析。
 
 **文件：**
 - 创建：`internal/tools/analyze_tool.go`
 - 创建：`internal/tools/analyze_tool_test.go`
+
+---
+
+## 设计说明
+
+分析工具接收验证结果（Docker 执行输出或 Agent 模拟结果）+ 完整 Skill 元数据，让 LLM 诊断失败原因并建议修复方案。
+
+**关键变化：** 分析 prompt 中传入 `sk.RawContent`（完整 SKILL.md）而非 `sk.Steps`，让 LLM 能看到 skill 的完整上下文（包括 Red Flags、约束条件等），给出更准确的诊断。
 
 ---
 
@@ -26,17 +34,21 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-type mockChatModel struct{}
+type analyzeMockModel struct{}
 
-func (m *mockChatModel) Generate(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+func (m *analyzeMockModel) Generate(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.Message, error) {
 	return &schema.Message{
-		Role:    schema.Assistant,
-		Content: `{"reason": "missing dependency", "suggest": "add go mod tidy before build", "fix_type": "command"}`,
+		Role: schema.Assistant,
+		Content: `{
+			"reason": "missing dependency: go mod tidy not run before build",
+			"suggest": "add 'go mod tidy' step before 'go build'",
+			"fix_type": "command"
+		}`,
 	}, nil
 }
 
 func TestAnalyzeDockerFailure(t *testing.T) {
-	at := NewAnalyzeTool(&mockChatModel{})
+	at := NewAnalyzeTool(&analyzeMockModel{})
 
 	result := &skill.ExecResult{
 		StepName: "build",
@@ -46,7 +58,13 @@ func TestAnalyzeDockerFailure(t *testing.T) {
 		Success:  false,
 	}
 
-	analysis, err := at.AnalyzeDocker(context.Background(), result, &skill.Skill{Name: "test"})
+	sk := &skill.Skill{
+		Name:        "test",
+		Description: "Build Go project",
+		RawContent:  "# Build\nRun go build.",
+	}
+
+	analysis, err := at.AnalyzeDocker(context.Background(), result, sk)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -60,7 +78,7 @@ func TestAnalyzeDockerFailure(t *testing.T) {
 }
 
 func TestAnalyzeAgentSimFailure(t *testing.T) {
-	at := NewAnalyzeTool(&mockChatModel{})
+	at := NewAnalyzeTool(&analyzeMockModel{})
 
 	simResult := &SimulateResult{
 		Pass:  false,
@@ -74,7 +92,13 @@ func TestAnalyzeAgentSimFailure(t *testing.T) {
 		},
 	}
 
-	analysis, err := at.AnalyzeAgentSim(context.Background(), simResult, &skill.Skill{Name: "test"})
+	sk := &skill.Skill{
+		Name:        "test",
+		Description: "TDD skill",
+		RawContent:  "# TDD\nAlways write tests first.",
+	}
+
+	analysis, err := at.AnalyzeAgentSim(context.Background(), simResult, sk)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -157,13 +181,14 @@ const analyzeSystemPrompt = `你是一位 Skill 质量专家。分析验证失�
 
 fix_type 说明：
 - command: 需要修改命令或脚本
-- instruction: 需要修改指导文本
+- instruction: 需要修改指导文本（使指导更清晰、更具体）
 - dependency: 需要添加或修改依赖`
 
 func buildDockerAnalyzePrompt(result *skill.ExecResult, sk *skill.Skill) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Skill: %s\n", sk.Name)
 	fmt.Fprintf(&b, "## 描述: %s\n\n", sk.Description)
+	fmt.Fprintf(&b, "## SKILL.md 完整内容\n\n%s\n\n", truncateStr(sk.RawContent, 3000))
 	fmt.Fprintf(&b, "## 失败步骤: %s\n", result.StepName)
 	fmt.Fprintf(&b, "退出码: %d\n", result.ExitCode)
 	if result.Stderr != "" {
@@ -172,7 +197,7 @@ func buildDockerAnalyzePrompt(result *skill.ExecResult, sk *skill.Skill) string 
 	if result.Stdout != "" {
 		fmt.Fprintf(&b, "Stdout: %s\n", truncateStr(result.Stdout, 500))
 	}
-	fmt.Fprintf(&b, "\n分析此步骤失败的原因并建议修复方案。\n")
+	fmt.Fprintf(&b, "\n请分析此 skill 执行失败的原因。返回 JSON。\n")
 	return b.String()
 }
 
@@ -180,15 +205,16 @@ func buildAgentSimAnalyzePrompt(simResult *SimulateResult, sk *skill.Skill) stri
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Skill: %s\n", sk.Name)
 	fmt.Fprintf(&b, "## 描述: %s\n\n", sk.Description)
+	fmt.Fprintf(&b, "## SKILL.md 完整内容\n\n%s\n\n", truncateStr(sk.RawContent, 3000))
 	fmt.Fprintf(&b, "## Agent 模拟测试结果\n")
 	fmt.Fprintf(&b, "得分: %.2f\n", simResult.Score)
 	fmt.Fprintf(&b, "通过: %v\n\n", simResult.Pass)
 
 	fmt.Fprintf(&b, "## 检查点详情\n")
 	for i, cp := range simResult.Checkpoints {
-		status := "✓"
+		status := "pass"
 		if !cp.Met {
-			status = "✗"
+			status = "FAIL"
 		}
 		fmt.Fprintf(&b, "%d. %s [%s]\n", i+1, cp.Checkpoint.Description, status)
 		if !cp.Met {
@@ -197,7 +223,7 @@ func buildAgentSimAnalyzePrompt(simResult *SimulateResult, sk *skill.Skill) stri
 	}
 
 	fmt.Fprintf(&b, "\n## Agent 行为记录\n%s\n", truncateStr(simResult.Trace, 1000))
-	fmt.Fprintf(&b, "\n分析为什么 agent 没有遵循 skill 的指导，并建议如何改进 skill 的描述。\n")
+	fmt.Fprintf(&b, "\n请分析为什么 agent 没有遵循 skill 的指导。考虑 skill 中的约束和 Red Flags。返回 JSON。\n")
 	return b.String()
 }
 
@@ -253,5 +279,5 @@ go test ./internal/tools/ -v -run TestAnalyze
 
 ```bash
 git add internal/tools/analyze_tool.go internal/tools/analyze_tool_test.go
-git commit -m "feat: 添加支持 Docker 和 Agent 模拟的分析工具"
+git commit -m "feat: 添加分析工具 — 基于完整 SKILL.md 诊断验证失败"
 ```
