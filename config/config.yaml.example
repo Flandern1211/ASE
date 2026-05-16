@@ -1,15 +1,25 @@
 #主模型
 models:
-  - name: deepseek-v3
-    provider: deepseek
-    api_key: ""
-    base_url: https://api.deepseek.com
-
+  - name: mimo-v2.5
+    provider: xiaomi
+    api_key: "mndn4zd41bw"
+    base_url: https://token-plan-cn.xiaomimimo.com/v1
+    model: mimo-v2.5
+  - name: mimo-v2.5
+    provider: xiaomi
+    api_key: "tp-4tsmndn4zd41bw"
+    base_url: https://token-plan-cn.xiaomimimo.com/v1
+    model: mimo-v2.5
+  - name: mimo-v2.5
+    provider: xiaomi
+    api_key: "tp-cv4tsmndn4zd41bw"
+    base_url: https://token-plan-cn.xiaomimimo.com/v1
+    model: mimo-v2.5
 #路由模型
 routing:
-  execute: deepseek-v3
-  analyze: deepseek-v3
-  improve: deepseek-v3
+  execute:  mimo-v2.5
+  analyze:  mimo-v2.5
+  improve:  mimo-v2.5
 
 #沙盒配置
 sandbox:
