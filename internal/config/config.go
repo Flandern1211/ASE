@@ -4,7 +4,6 @@ package config
 type Config struct {
 	Models   []ModelEntry  `mapstructure:"models"`
 	Routing  RoutingConfig `mapstructure:"routing"`
-	Sandbox  SandboxConfig `mapstructure:"sandbox"`
 	MaxRetry int           `mapstructure:"max_retries"`
 }
 
@@ -22,11 +21,4 @@ type RoutingConfig struct {
 	Execute string `mapstructure:"execute"`
 	Analyze string `mapstructure:"analyze"`
 	Improve string `mapstructure:"improve"`
-}
-
-// SandboxConfig 沙箱配置
-type SandboxConfig struct {
-	Image           string `mapstructure:"image"`
-	NetworkDisabled bool   `mapstructure:"network_disabled"`
-	Cleanup         bool   `mapstructure:"cleanup"`
 }
